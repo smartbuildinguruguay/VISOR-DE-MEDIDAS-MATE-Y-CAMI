@@ -195,7 +195,7 @@
     <button class="tool-btn" id="btn-inspect" data-mode="inspect">🔍 Inspeccionar material</button>
     <button class="tool-btn danger" id="btn-clear">🗑 Limpiar</button>
     <div class="divider"></div>
-    <button class="tool-btn" id="btn-wireframe">🔲 Wireframe</button>
+    <button class="tool-btn" id="btn-wireframe">▢ Líneas ocultas</button>
     <button class="tool-btn" id="btn-settings">⚙️ Ajustes visuales</button>
     <div id="readout">
       <div class="pill"><span class="lbl">Escala</span> <b id="scale-val">1.000</b></div>
@@ -477,17 +477,39 @@ loader.load(MODEL_URL, (gltf) => {
   wireGroup.visible = false;
   scene.add(wireGroup);
 
+  // Material blanco plano para el modo "líneas ocultas" (como el estilo Hidden Line
+  // de SketchUp): la cara tapa lo que hay detrás (para entender la profundidad),
+  // y el polygonOffset la empuja un pelo hacia atrás para que la arista negra
+  // dibuje limpia encima, sin parpadeo por z-fighting.
+  const hiddenLineMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
+  });
+  const originalMaterials = new Map();
+
   let wireframeOn = false;
   let bgBeforeWireframe = scene.background.clone();
   document.getElementById('btn-wireframe').addEventListener('click', function(){
     wireframeOn = !wireframeOn;
     this.classList.toggle('active', wireframeOn);
-    modelRoot.visible = !wireframeOn;
     wireGroup.visible = wireframeOn;
+
     if(wireframeOn){
+      modelRoot.traverse((obj)=>{
+        if(obj.isMesh){
+          originalMaterials.set(obj, obj.material);
+          obj.material = hiddenLineMat;
+        }
+      });
       bgBeforeWireframe = scene.background.clone();
       scene.background = new THREE.Color(0xffffff);
     } else {
+      modelRoot.traverse((obj)=>{
+        if(obj.isMesh && originalMaterials.has(obj)){
+          obj.material = originalMaterials.get(obj);
+        }
+      });
+      originalMaterials.clear();
       scene.background = bgBeforeWireframe;
     }
   });
