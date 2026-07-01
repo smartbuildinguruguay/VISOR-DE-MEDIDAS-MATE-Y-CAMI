@@ -90,6 +90,20 @@
   #snap-legend .dot.e{background:var(--warn);border-radius:2px;}
   #snap-legend .dot.f{background:var(--text-dim);}
 
+  #view-coords{
+    display:none;position:absolute;top:50px;left:14px;z-index:27;max-width:340px;
+    background:rgba(26,26,24,.95);border:1px solid var(--ok);border-radius:8px;
+    padding:10px 12px;font-size:11px;color:var(--text);
+  }
+  #view-coords textarea{
+    width:100%;height:60px;background:#111;color:var(--ok);border:1px solid var(--line);
+    border-radius:4px;font-family:monospace;font-size:10.5px;padding:6px;resize:none;
+  }
+  #view-coords button{
+    margin-top:6px;background:var(--ok);border:none;color:#1a1a18;font-weight:600;
+    padding:5px 10px;border-radius:4px;cursor:pointer;font-size:11px;
+  }
+
   #settings-panel{
     display:none;position:absolute;top:50px;right:14px;z-index:27;width:250px;
     background:rgba(26,26,24,.95);border:1px solid var(--line);border-radius:8px;
@@ -193,6 +207,9 @@
     <div class="divider"></div>
     <button class="tool-btn" id="btn-calib" data-mode="calib">🎯 Calibrar escala</button>
     <button class="tool-btn" id="btn-inspect" data-mode="inspect">🔍 Inspeccionar material</button>
+    <div class="divider"></div>
+    <button class="tool-btn" id="btn-save-view">📷 Fijar vista inicial</button>
+    <button class="tool-btn" id="btn-reset-view">↺ Vista automática</button>
     <button class="tool-btn danger" id="btn-clear">🗑 Limpiar</button>
     <div class="divider"></div>
     <button class="tool-btn" id="btn-wireframe">▢ Líneas ocultas</button>
@@ -216,6 +233,7 @@
         <span><i class="dot e"></i>arista</span>
         <span><i class="dot f"></i>libre (cara)</span>
       </div>
+      <div id="view-coords"></div>
       <div id="calib-banner">
         Clickeaste 2 puntos. Distancia real conocida (mm):
         <input type="number" id="calib-input" step="1" placeholder="ej: 4000">
@@ -306,7 +324,21 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
-const MODEL_URL = 'https://raw.githubusercontent.com/smartbuildinguruguay/VISOR-DE-MEDIDAS-MATE-Y-CAMI/main/models/index.glb';
+const MODEL_URL_FAST = 'https://cdn.jsdelivr.net/gh/smartbuildinguruguay/VISOR-DE-MEDIDAS-MATE-Y-CAMI@main/models/index.glb';
+const MODEL_URL_FALLBACK = 'https://raw.githubusercontent.com/smartbuildinguruguay/VISOR-DE-MEDIDAS-MATE-Y-CAMI/main/models/index.glb';
+
+// Vista inicial fija para TODOS los que abren el link (independiente del navegador
+// de cada uno). Se completa pegando los valores que tira el botón "Fijar vista inicial".
+// Ejemplo: { px: 12.3, py: 8.1, pz: 10.4, tx: 0.2, ty: 1.1, tz: -0.5 }
+const HARDCODED_VIEW = { px: -38.858, py: 3.362, pz: 6.096, tx: -38.326, ty: 3.321, tz: 5.451 };
+
+function getSavedView(){
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY + '_view');
+    if(raw) return JSON.parse(raw);
+  } catch(e){}
+  return HARDCODED_VIEW;
+}
 const STORAGE_KEY = 'sbu_visor3d_matecami';
 
 const canvas = document.getElementById('three-canvas');
@@ -365,17 +397,28 @@ let mouseScreen = new THREE.Vector2(-9999, -9999);
 let mouseOverCanvas = false;
 
 const loader = new GLTFLoader();
-loader.load(MODEL_URL, (gltf) => {
-  modelRoot = gltf.scene;
+
+function loadModel(url, isFallback){
+  loader.load(url, (gltf) => {
+    modelRoot = gltf.scene;
   scene.add(modelRoot);
 
-  // Encuadrar cámara según el tamaño real del modelo
+  // Encuadrar cámara: si hay una vista guardada (localStorage, o fijada en el código
+  // para que la vean todos los que abren el link), la usamos. Sino, encuadre automático
+  // según el tamaño del modelo.
   const box = new THREE.Box3().setFromObject(modelRoot);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z);
-  controls.target.copy(center);
-  camera.position.copy(center).add(new THREE.Vector3(maxDim * 0.9, maxDim * 0.7, maxDim * 0.9));
+
+  const savedView = getSavedView();
+  if(savedView){
+    camera.position.set(savedView.px, savedView.py, savedView.pz);
+    controls.target.set(savedView.tx, savedView.ty, savedView.tz);
+  } else {
+    controls.target.copy(center);
+    camera.position.copy(center).add(new THREE.Vector3(maxDim * 0.9, maxDim * 0.7, maxDim * 0.9));
+  }
   camera.near = maxDim / 1000;
   camera.far = maxDim * 50;
   camera.updateProjectionMatrix();
@@ -514,6 +557,37 @@ loader.load(MODEL_URL, (gltf) => {
     }
   });
 
+  /* ===== Fijar / restablecer vista inicial ===== */
+  document.getElementById('btn-save-view').addEventListener('click', function(){
+    const p = camera.position, t = controls.target;
+    const view = {
+      px: +p.x.toFixed(3), py: +p.y.toFixed(3), pz: +p.z.toFixed(3),
+      tx: +t.x.toFixed(3), ty: +t.y.toFixed(3), tz: +t.z.toFixed(3)
+    };
+    localStorage.setItem(STORAGE_KEY + '_view', JSON.stringify(view));
+
+    const box = document.getElementById('view-coords');
+    box.style.display = 'block';
+    box.innerHTML = '<b style="color:var(--ok)">✓ Vista guardada en este navegador.</b><br>' +
+      'Para que TODOS vean esta vista, pasale este texto a Claude:<br>' +
+      '<textarea readonly id="view-coords-text">{ px: ' + view.px + ', py: ' + view.py + ', pz: ' + view.pz +
+      ', tx: ' + view.tx + ', ty: ' + view.ty + ', tz: ' + view.tz + ' }</textarea>' +
+      '<button id="view-coords-copy">Copiar</button>';
+    document.getElementById('view-coords-copy').addEventListener('click', ()=>{
+      const ta = document.getElementById('view-coords-text');
+      ta.select();
+      navigator.clipboard && navigator.clipboard.writeText(ta.value).catch(()=>{});
+      document.getElementById('view-coords-copy').textContent = '¡Copiado!';
+    });
+  });
+
+  document.getElementById('btn-reset-view').addEventListener('click', function(){
+    localStorage.removeItem(STORAGE_KEY + '_view');
+    const box = document.getElementById('view-coords');
+    box.style.display = 'block';
+    box.innerHTML = '<b>Vista guardada borrada.</b> Recargá la página (F5) para volver al encuadre automático.';
+  });
+
   /* ===== Panel de ajustes visuales ===== */
   const btnSettings = document.getElementById('btn-settings');
   const panel = document.getElementById('settings-panel');
@@ -607,16 +681,26 @@ loader.load(MODEL_URL, (gltf) => {
     allMaterials().forEach(m=>{ m.side = THREE.DoubleSide; m.transparent = false; m.alphaTest = 0; m.needsUpdate = true; });
     document.getElementById('s-opaque').checked = true;
   });
-}, (progressEvent) => {
-  if (progressEvent.total) {
-    const pct = Math.round((progressEvent.loaded / progressEvent.total) * 100);
-    document.getElementById('progress-fill').style.width = pct + '%';
-    document.getElementById('loading-text').textContent = 'Descargando modelo 3D… ' + pct + '%';
-  }
-}, (err) => {
-  document.getElementById('loading-text').textContent = '⚠ No se pudo cargar el modelo desde GitHub. Revisá la URL raw.';
-  console.error(err);
-});
+  }, (progressEvent) => {
+    if (progressEvent.total) {
+      const pct = Math.round((progressEvent.loaded / progressEvent.total) * 100);
+      document.getElementById('progress-fill').style.width = pct + '%';
+      const via = isFallback ? ' (vía GitHub)' : ' (vía jsDelivr)';
+      document.getElementById('loading-text').textContent = 'Descargando modelo 3D… ' + pct + '%' + via;
+    }
+  }, (err) => {
+    if(!isFallback){
+      console.warn('jsDelivr falló, reintentando desde GitHub raw...', err);
+      document.getElementById('loading-text').textContent = 'jsDelivr no respondió, probando con GitHub…';
+      loadModel(MODEL_URL_FALLBACK, true);
+    } else {
+      document.getElementById('loading-text').textContent = '⚠ No se pudo cargar el modelo (falló jsDelivr y GitHub). Revisá tu conexión.';
+      console.error(err);
+    }
+  });
+}
+
+loadModel(MODEL_URL_FAST, false);
 
 function onResize(){
   const w = wrap.clientWidth, h = wrap.clientHeight;
